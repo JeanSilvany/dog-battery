@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Dog Battery – calculadora de artilharia para WARDOGS</title>
+  <meta name="description" content="Cole as coordenadas do mapa do WARDOGS e receba a distância e a direção para o L81 e o SPH-2.">
+  <meta name="theme-color" content="#23251C">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='11' fill='none' stroke='%23F0B44C' stroke-width='3'/%3E%3Cpath d='M16 2v9M16 21v9M2 16h9M21 16h9' stroke='%23F0B44C' stroke-width='3'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Saira+Stencil+One&family=Saira+Condensed:wght@500;600;700&family=Saira:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module" src="js/app.js"></script>
+</head>
+<body>
+  <header class="top">
+    <h1>Dog Battery</h1>
+    <p>Cole as coordenadas do mapa do WARDOGS e receba a distância e a direção para acertar o alvo.</p>
+  </header>
+
+  <main class="layout">
+    <section class="panel coords" aria-labelledby="h-coords">
+      <h2 id="h-coords">Coordenadas</h2>
+
+      <div class="field">
+        <label for="weapon">Peça</label>
+        <select id="weapon"></select>
+      </div>
+
+      <fieldset class="point">
+        <legend><span class="mark mark-gun" aria-hidden="true"></span>Sua posição</legend>
+        <label for="gun-paste">Colar do mapa</label>
+        <input id="gun-paste" class="paste" placeholder="x98.43, y110.38" autocomplete="off" spellcheck="false">
+        <div class="xy">
+          <div><label for="gun-x">X</label><input id="gun-x" inputmode="decimal" autocomplete="off"></div>
+          <div><label for="gun-y">Y</label><input id="gun-y" inputmode="decimal" autocomplete="off"></div>
+        </div>
+      </fieldset>
+
+      <fieldset class="point">
+        <legend><span class="mark mark-target" aria-hidden="true"></span>Alvo</legend>
+        <label for="target-paste">Colar do mapa</label>
+        <input id="target-paste" class="paste" placeholder="x95.55, y106.36" autocomplete="off" spellcheck="false">
+        <div class="xy">
+          <div><label for="target-x">X</label><input id="target-x" inputmode="decimal" autocomplete="off"></div>
+          <div><label for="target-y">Y</label><input id="target-y" inputmode="decimal" autocomplete="off"></div>
+        </div>
+      </fieldset>
+
+      <div class="actions">
+        <button type="button" id="new-target">Novo alvo</button>
+        <button type="button" id="swap">Inverter posições</button>
+        <button type="button" id="save-mission" class="primary">Salvar no histórico</button>
+      </div>
+    </section>
+
+    <section class="solution" aria-labelledby="h-solution">
+      <h2 id="h-solution" class="visually-hidden">Solução de tiro</h2>
+
+      <div class="sight" id="sight" aria-live="polite">
+        <div class="readout readout-left">
+          <span class="tag">RNG</span>
+          <output id="out-range">—</output>
+          <span class="unit">metros</span>
+        </div>
+        <div class="reticle" aria-hidden="true"></div>
+        <div class="readout readout-right">
+          <span class="tag">AZ</span>
+          <output id="out-az">—</output>
+          <span class="unit">graus <b id="out-card"></b></span>
+        </div>
+      </div>
+
+      <p class="status" id="status" aria-live="polite"></p>
+
+      <dl class="details">
+        <div><dt>Azimute em mils</dt><dd id="out-mil">—</dd></div>
+        <div><dt>Leste / oeste</dt><dd id="out-de">—</dd></div>
+        <div><dt>Norte / sul</dt><dd id="out-dn">—</dd></div>
+      </dl>
+
+      <div class="actions">
+        <button type="button" id="copy-solution">Copiar solução</button>
+        <button type="button" id="copy-link">Copiar link da missão</button>
+      </div>
+
+      <figure class="map">
+        <svg id="map" viewBox="0 0 400 300" role="img" aria-label="Esquema com a posição da peça, o alvo e o alcance"></svg>
+      </figure>
+    </section>
+
+    <section class="panel correction" aria-labelledby="h-correction">
+      <h2 id="h-correction">Corrigir pelo impacto</h2>
+      <label for="impact-paste">Onde o projétil caiu</label>
+      <input id="impact-paste" class="paste" placeholder="Cole a coordenada do impacto" autocomplete="off" spellcheck="false">
+      <div class="xy">
+        <div><label for="impact-x">X</label><input id="impact-x" inputmode="decimal" autocomplete="off"></div>
+        <div><label for="impact-y">Y</label><input id="impact-y" inputmode="decimal" autocomplete="off"></div>
+      </div>
+      <div class="field">
+        <label for="dial-used">RNG usado no disparo (m)</label>
+        <input id="dial-used" inputmode="decimal" autocomplete="off">
+      </div>
+      <div id="correction-out" class="correction-out" aria-live="polite"></div>
+      <div class="actions">
+        <button type="button" id="clear-impact">Limpar impacto</button>
+      </div>
+    </section>
+
+    <section class="panel log" aria-labelledby="h-history">
+      <h2 id="h-history">Histórico de missões</h2>
+      <p id="history-empty" class="muted">Nenhuma missão salva. Use “Salvar no histórico” para guardar alvos que você vai repetir.</p>
+      <ol id="history-list" class="history"></ol>
+      <div class="actions">
+        <button type="button" id="clear-history">Limpar histórico</button>
+      </div>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <p>Distância = 100 × √((X<sub>alvo</sub> − X<sub>arma</sub>)² + (Y<sub>alvo</sub> − Y<sub>arma</sub>)²). Cada unidade do mapa vale 100 m; X cresce para leste e Y para norte.</p>
+    <p>A distância é plana. Atirando morro acima, o RNG certo tende a ser maior; morro abaixo, menor. Os alcances das peças são medições da comunidade.</p>
+    <p>Projeto feito por fãs, sem vínculo com a BULKHEAD ou a Team17.</p>
+  </footer>
+
+  <div id="toast" class="toast" role="status" hidden></div>
+</body>
+</html>
