@@ -11,6 +11,7 @@ Projeto feito por fãs, sem vínculo com a BULKHEAD ou a Team17.
 - Correção pelo impacto: cole onde o projétil caiu e veja quanto aumentar ou diminuir o RNG e para que lado girar.
 - Link da missão: gera uma URL com as coordenadas para mandar no Discord. Quem abre já vê a solução.
 - Histórico local dos alvos salvos e lembrança da última posição da peça.
+- Mostrador animado: a peça gira até o azimute, o alvo aparece na distância certa e o disparo é animado (respeita a opção de movimento reduzido do sistema).
 
 ## Como funciona o cálculo
 
@@ -34,7 +35,8 @@ js/
   core/parse.js          leitura das coordenadas coladas
   core/storage.js        localStorage e link de compartilhamento
   data/weapons.js        peças e alcances
-  ui/map.js              esquema em SVG
+  ui/dial.js             mostrador animado (bússola, alvo e disparo)
+  ui/animate.js          números que rolam até o novo valor
 ```
 
 Os alcances em `js/data/weapons.js` são medições da comunidade (L81: 50–700 m, SPH-2: 745–2.660 m). Se o jogo mudar, é só editar ali.

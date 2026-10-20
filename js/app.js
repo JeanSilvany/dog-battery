@@ -1,161 +1,196 @@
 import { WEAPONS, DEFAULT_WEAPON } from "./data/weapons.js";
-import { solve, checkRange, correction, isPoint } from "./core/fire-solution.js";
+import { solve, checkRange, correction, isPoint, normalizeTurn } from "./core/fire-solution.js";
 import { parseNumber, parsePair } from "./core/parse.js";
 import {
   loadState, saveState, loadHistory, addToHistory, clearHistory,
   readShareParams, buildShareUrl,
 } from "./core/storage.js";
-import { drawMap } from "./ui/map.js";
+import { createDial } from "./ui/dial.js";
+import { tweenNumber, clearNumber } from "./ui/animate.js";
 
 const $ = (id) => document.getElementById(id);
 
 const el = {
-  weapon: $("weapon"),
-  gunPaste: $("gun-paste"), gunX: $("gun-x"), gunY: $("gun-y"),
-  tgtPaste: $("target-paste"), tgtX: $("target-x"), tgtY: $("target-y"),
-  impPaste: $("impact-paste"), impX: $("impact-x"), impY: $("impact-y"),
+  weapons: $("weapons"),
+  gun: $("gun"), gunParsed: $("gun-parsed"),
+  target: $("target"), targetParsed: $("target-parsed"),
+  impact: $("impact"), impactParsed: $("impact-parsed"),
   dialUsed: $("dial-used"),
-  outRange: $("out-range"), outAz: $("out-az"), outCard: $("out-card"),
-  outMil: $("out-mil"), outDe: $("out-de"), outDn: $("out-dn"),
-  status: $("status"), sight: $("sight"),
+  outRange: $("out-range"), outAz: $("out-az"), status: $("status"),
   correctionOut: $("correction-out"),
-  map: $("map"),
-  historyList: $("history-list"), historyEmpty: $("history-empty"),
+  historyList: $("history-list"), historyEmpty: $("history-empty"), historyCount: $("history-count"),
   toast: $("toast"),
 };
 
+const dial = createDial($("dial"));
+
 const fmt = (n, digits = 0) =>
   n.toLocaleString("pt-BR", { minimumFractionDigits: digits, maximumFractionDigits: digits });
-const signed = (n, digits = 0) => (n >= 0 ? "+" : "−") + fmt(Math.abs(n), digits);
+const wrap360 = (d) => ((d % 360) + 360) % 360;
+const pointText = (p) => (p ? `${p.x}, ${p.y}` : "");
 
-/* ---------- Estado ---------- */
+let weaponId = DEFAULT_WEAPON;
+let azShown = 0; // acumulado, para o número girar pelo caminho mais curto
+let lastKey = "";
+let fireTimer;
 
-const readPoint = (xEl, yEl) => ({ x: parseNumber(xEl.value), y: parseNumber(yEl.value) });
-const writePoint = (xEl, yEl, p) => {
-  xEl.value = p ? String(p.x) : "";
-  yEl.value = p ? String(p.y) : "";
-};
+/* ---------- Leitura ---------- */
 
-function current() {
-  const weaponId = el.weapon.value;
-  return {
-    weaponId,
-    weapon: WEAPONS[weaponId],
-    gun: readPoint(el.gunX, el.gunY),
-    target: readPoint(el.tgtX, el.tgtY),
-    impact: readPoint(el.impX, el.impY),
-  };
+function readField(input, out) {
+  const raw = input.value.trim();
+  const p = parsePair(raw);
+  const bad = raw !== "" && !p;
+  input.classList.toggle("invalid", bad);
+  out.classList.toggle("error", bad);
+  out.textContent = p ? `X ${fmt(p.x, 2)}  ·  Y ${fmt(p.y, 2)}` : bad ? "Cole dois números: X e Y" : "";
+  return p;
 }
 
 /* ---------- Render ---------- */
 
 function render() {
-  const s = current();
-  saveState({
-    weapon: s.weaponId,
-    gun: isPoint(s.gun) ? s.gun : null,
-    target: isPoint(s.target) ? s.target : null,
-  });
+  const weapon = WEAPONS[weaponId];
+  const gun = readField(el.gun, el.gunParsed);
+  const target = readField(el.target, el.targetParsed);
+  const impact = readField(el.impact, el.impactParsed);
 
-  const sol = solve(s.gun, s.target);
-  renderSolution(sol, s);
-  renderCorrection(s, sol);
-  drawMap(el.map, {
-    gun: s.gun,
-    target: s.target,
-    impact: isPoint(s.impact) ? s.impact : null,
-    weapon: s.weapon,
-  });
+  saveState({ weapon: weaponId, gun, target });
+
+  const sol = solve(gun, target);
+  dial.update({ solution: sol, weapon, impact: solve(gun, impact) });
+
+  renderReadout(sol, weapon, gun);
+  renderCorrection(gun, target, impact, sol);
+
+  // Anima o disparo só quando a solução muda e a pessoa para de digitar
+  const key = sol ? `${weaponId}|${gun.x},${gun.y}|${target.x},${target.y}` : "";
+  if (key && key !== lastKey) {
+    clearTimeout(fireTimer);
+    fireTimer = setTimeout(() => dial.fire(), 280);
+  }
+  lastKey = key;
 }
 
-function setStatus(text, tone = "") {
-  el.status.textContent = text;
-  el.status.dataset.tone = tone;
-  el.sight.dataset.tone = tone;
-}
-
-function renderSolution(sol, s) {
+function renderReadout(sol, weapon, gun) {
+  const status = el.status;
   if (!sol) {
-    el.outRange.textContent = "—";
-    el.outAz.textContent = "—";
-    el.outCard.textContent = "";
-    el.outMil.textContent = el.outDe.textContent = el.outDn.textContent = "—";
-    setStatus(isPoint(s.gun) ? "Agora cole as coordenadas do alvo." : "Comece colando a posição da sua peça.");
+    clearNumber(el.outRange);
+    el.outAz.textContent = "Aguardando coordenadas";
+    status.textContent = gun ? "Agora cole as coordenadas do alvo." : "Cole a sua posição e a do alvo.";
+    status.dataset.tone = "";
     return;
   }
 
-  el.outRange.textContent = fmt(sol.range);
-  el.outAz.textContent = sol.azimuthDeg == null ? "—" : fmt(sol.azimuthDeg, 1);
-  el.outCard.textContent = sol.cardinal ?? "";
-  el.outMil.textContent = sol.azimuthMil == null ? "—" : fmt(sol.azimuthMil);
-  el.outDe.textContent = `${signed(sol.dx)} m ${sol.dx >= 0 ? "L" : "O"}`;
-  el.outDn.textContent = `${signed(sol.dy)} m ${sol.dy >= 0 ? "N" : "S"}`;
+  tweenNumber(el.outRange, sol.range, (v) => fmt(v));
 
-  const check = checkRange(sol.range, s.weapon);
-  if (sol.range === 0) {
-    setStatus("A arma e o alvo estão no mesmo ponto.", "warn");
-  } else if (check.status === "far") {
-    setStatus(`Fora de alcance: ${fmt(check.by)} m além do máximo do ${s.weapon.name} (${fmt(s.weapon.max)} m).`, "warn");
-  } else if (check.status === "near") {
-    setStatus(`Perto demais: faltam ${fmt(check.by)} m para o mínimo do ${s.weapon.name} (${fmt(s.weapon.min)} m).`, "warn");
+  if (sol.azimuthDeg == null) {
+    el.outAz.textContent = "Mesmo ponto";
   } else {
-    setStatus(`Gire para ${fmt(sol.azimuthDeg, 0)}° e coloque ${fmt(sol.range)} m no RNG.`, "ok");
+    azShown += normalizeTurn(sol.azimuthDeg - wrap360(azShown));
+    const mils = fmt(sol.azimuthMil);
+    tweenNumber(el.outAz, azShown, (v) => `${fmt(wrap360(v), 1)}° ${sol.cardinal}  ·  ${mils} mils`);
   }
 
-  el.dialUsed.placeholder = fmt(sol.range);
+  const check = checkRange(sol.range, weapon);
+  if (sol.range === 0) {
+    status.textContent = "A peça e o alvo estão no mesmo ponto.";
+    status.dataset.tone = "warn";
+  } else if (check.status === "far") {
+    status.textContent = `Fora de alcance: ${fmt(check.by)} m além do máximo do ${weapon.name}.`;
+    status.dataset.tone = "warn";
+  } else if (check.status === "near") {
+    status.textContent = `Perto demais: o ${weapon.name} precisa de pelo menos ${fmt(weapon.min)} m.`;
+    status.dataset.tone = "warn";
+  } else {
+    status.textContent = "No alcance. Gire a peça e coloque a distância no RNG.";
+    status.dataset.tone = "ok";
+  }
+  el.dialUsed.placeholder = fmt(Math.round(sol.range));
 }
 
-function renderCorrection(s, sol) {
+function renderCorrection(gun, target, impact, sol) {
   const out = el.correctionOut;
-  if (!sol || !isPoint(s.impact)) {
-    out.innerHTML = `<p class="muted">Depois do primeiro disparo, marque o ponto de impacto no mapa e cole aqui.</p>`;
+  if (!sol || !impact) {
+    out.innerHTML = `<p class="muted">Depois do primeiro disparo, marque no mapa onde o projétil caiu e cole aqui.</p>`;
     return;
   }
-  const dial = el.dialUsed.value.trim() === "" ? Math.round(sol.range) : parseNumber(el.dialUsed.value);
-  const c = correction(s.gun, s.target, s.impact, dial);
+  const used = el.dialUsed.value.trim() === "" ? Math.round(sol.range) : parseNumber(el.dialUsed.value);
+  const c = correction(gun, target, impact, used);
   if (!c) {
     out.innerHTML = `<p class="muted">Confira o RNG usado no disparo.</p>`;
     return;
   }
 
-  const rangeText =
-    Math.abs(c.rangeDelta) < 1
-      ? "Distância certa, mantenha o RNG."
-      : c.rangeDelta > 0
-        ? `Caiu curto. Aumente ${fmt(c.rangeDelta)} m.`
-        : `Caiu longe. Diminua ${fmt(-c.rangeDelta)} m.`;
-
-  const turnText =
-    c.turnDeg == null || Math.abs(c.turnDeg) < 0.1
-      ? "Direção certa."
-      : `Gire ${fmt(Math.abs(c.turnDeg), 1)}° (${fmt(Math.abs(c.turnMil))} mils) para a ${c.turnDeg > 0 ? "direita" : "esquerda"}.`;
+  const rangeText = Math.abs(c.rangeDelta) < 1
+    ? "Distância certa."
+    : c.rangeDelta > 0 ? `Caiu curto, aumente ${fmt(c.rangeDelta)} m.` : `Caiu longe, diminua ${fmt(-c.rangeDelta)} m.`;
+  const turnText = c.turnDeg == null || Math.abs(c.turnDeg) < 0.1
+    ? "Direção certa."
+    : `Gire ${fmt(Math.abs(c.turnDeg), 1)}° para a ${c.turnDeg > 0 ? "direita" : "esquerda"}.`;
 
   out.innerHTML = `
-    <div class="new-dial"><span>Novo RNG</span><strong>${fmt(c.newDial)}<small>m</small></strong></div>
-    <ul>
-      <li>${rangeText}</li>
-      <li>${turnText}</li>
-      <li class="muted">O impacto ficou a ${fmt(c.missBy)} m do alvo.</li>
-    </ul>`;
+    <p class="new-dial"><span>Novo RNG</span><strong>${fmt(c.newDial)} m</strong></p>
+    <p>${rangeText} ${turnText}</p>
+    <p class="muted">O impacto ficou a ${fmt(c.missBy)} m do alvo.</p>`;
 }
 
 function renderHistory(list = loadHistory()) {
   el.historyList.innerHTML = "";
   el.historyEmpty.hidden = list.length > 0;
-  for (const [i, h] of list.entries()) {
+  el.historyCount.textContent = list.length ? String(list.length) : "";
+  list.forEach((h, i) => {
     const li = document.createElement("li");
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "history-item";
-    btn.dataset.index = String(i);
-    const weaponName = WEAPONS[h.weapon]?.name ?? h.weapon;
-    btn.innerHTML = `
-      <span class="h-range">${fmt(h.range)} m</span>
-      <span class="h-az">${h.azimuth == null ? "—" : fmt(h.azimuth, 0) + "°"}</span>
-      <span class="h-meta">${weaponName}, alvo ${h.target.x} / ${h.target.y}</span>`;
-    li.append(btn);
+    const name = WEAPONS[h.weapon]?.name ?? h.weapon;
+    const az = h.azimuth == null ? "—" : `${fmt(h.azimuth, 0)}°`;
+    li.innerHTML = `
+      <button type="button" class="history-item" data-index="${i}">
+        <strong>${fmt(h.range)} m</strong>
+        <span>${az}</span>
+        <small>${name}, alvo ${h.target.x} / ${h.target.y}</small>
+      </button>`;
     el.historyList.append(li);
+  });
+}
+
+/* ---------- Seletor de peça ---------- */
+
+function buildWeapons() {
+  const marker = document.createElement("span");
+  marker.className = "weapons-marker";
+  marker.setAttribute("aria-hidden", "true");
+  el.weapons.append(marker);
+
+  for (const w of Object.values(WEAPONS)) {
+    const label = document.createElement("label");
+    label.className = "weapon";
+    label.innerHTML = `
+      <input type="radio" name="weapon" value="${w.id}">
+      <span class="weapon-name">${w.name}</span>
+      <span class="weapon-range">${w.max ? `${fmt(w.min)}–${fmt(w.max)} m` : w.caliber}</span>`;
+    el.weapons.append(label);
   }
+
+  el.weapons.addEventListener("change", (e) => {
+    weaponId = e.target.value;
+    moveMarker();
+    render();
+  });
+  window.addEventListener("resize", moveMarker);
+}
+
+function selectWeapon(id) {
+  weaponId = WEAPONS[id] ? id : DEFAULT_WEAPON;
+  const input = el.weapons.querySelector(`input[value="${weaponId}"]`);
+  if (input) input.checked = true;
+  moveMarker();
+}
+
+function moveMarker() {
+  const label = el.weapons.querySelector("input:checked")?.parentElement;
+  const marker = el.weapons.querySelector(".weapons-marker");
+  if (!label || !marker) return;
+  marker.style.width = `${label.offsetWidth}px`;
+  marker.style.transform = `translateX(${label.offsetLeft}px)`;
 }
 
 /* ---------- Ações ---------- */
@@ -163,9 +198,9 @@ function renderHistory(list = loadHistory()) {
 let toastTimer;
 function toast(msg) {
   el.toast.textContent = msg;
-  el.toast.hidden = false;
+  el.toast.classList.add("show");
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => (el.toast.hidden = true), 2200);
+  toastTimer = setTimeout(() => el.toast.classList.remove("show"), 2200);
 }
 
 async function copy(text, okMsg) {
@@ -175,9 +210,7 @@ async function copy(text, okMsg) {
   } catch {
     const ta = document.createElement("textarea");
     ta.value = text;
-    ta.setAttribute("readonly", "");
-    ta.style.position = "fixed";
-    ta.style.opacity = "0";
+    ta.style.cssText = "position:fixed;opacity:0";
     document.body.append(ta);
     ta.select();
     const ok = document.execCommand("copy");
@@ -186,60 +219,34 @@ async function copy(text, okMsg) {
   }
 }
 
-function bindPaste(pasteEl, xEl, yEl) {
-  pasteEl.addEventListener("input", () => {
-    const p = parsePair(pasteEl.value);
-    if (p) {
-      writePoint(xEl, yEl, p);
-      render();
-    }
-  });
-}
+const current = () => ({ gun: parsePair(el.gun.value), target: parsePair(el.target.value) });
 
 function wire() {
-  for (const w of Object.values(WEAPONS)) {
-    const opt = document.createElement("option");
-    opt.value = w.id;
-    opt.textContent = w.max ? `${w.name} (${fmt(w.min)}–${fmt(w.max)} m)` : `${w.name} (${w.caliber})`;
-    el.weapon.append(opt);
-  }
+  [el.gun, el.target, el.impact, el.dialUsed].forEach((input) =>
+    input.addEventListener("input", render),
+  );
 
-  bindPaste(el.gunPaste, el.gunX, el.gunY);
-  bindPaste(el.tgtPaste, el.tgtX, el.tgtY);
-  bindPaste(el.impPaste, el.impX, el.impY);
-
-  [el.weapon, el.gunX, el.gunY, el.tgtX, el.tgtY, el.impX, el.impY, el.dialUsed]
-    .forEach((input) => input.addEventListener("input", render));
-
-  $("swap").addEventListener("click", () => {
-    const s = current();
-    writePoint(el.gunX, el.gunY, isPoint(s.target) ? s.target : null);
-    writePoint(el.tgtX, el.tgtY, isPoint(s.gun) ? s.gun : null);
-    el.gunPaste.value = el.tgtPaste.value = "";
+  $("swap").addEventListener("click", (e) => {
+    const btn = e.currentTarget;
+    [el.gun.value, el.target.value] = [el.target.value, el.gun.value];
+    btn.classList.remove("spin");
+    btn.getBoundingClientRect();
+    btn.classList.add("spin");
     render();
   });
 
   $("new-target").addEventListener("click", () => {
-    writePoint(el.tgtX, el.tgtY, null);
-    writePoint(el.impX, el.impY, null);
-    el.tgtPaste.value = el.impPaste.value = el.dialUsed.value = "";
+    el.target.value = el.impact.value = el.dialUsed.value = "";
     render();
-    el.tgtPaste.focus();
-  });
-
-  $("clear-impact").addEventListener("click", () => {
-    writePoint(el.impX, el.impY, null);
-    el.impPaste.value = el.dialUsed.value = "";
-    render();
+    el.target.focus();
   });
 
   $("save-mission").addEventListener("click", () => {
-    const s = current();
-    const sol = solve(s.gun, s.target);
-    if (!sol) return toast("Preencha a arma e o alvo antes de salvar.");
+    const { gun, target } = current();
+    const sol = solve(gun, target);
+    if (!sol) return toast("Preencha a peça e o alvo antes de salvar.");
     renderHistory(addToHistory({
-      weapon: s.weaponId, gun: s.gun, target: s.target,
-      range: sol.range, azimuth: sol.azimuthDeg, at: Date.now(),
+      weapon: weaponId, gun, target, range: sol.range, azimuth: sol.azimuthDeg, at: Date.now(),
     }));
     toast("Missão salva no histórico.");
   });
@@ -251,53 +258,46 @@ function wire() {
     if (!btn) return;
     const h = loadHistory()[Number(btn.dataset.index)];
     if (!h) return;
-    if (WEAPONS[h.weapon]) el.weapon.value = h.weapon;
-    writePoint(el.gunX, el.gunY, h.gun);
-    writePoint(el.tgtX, el.tgtY, h.target);
-    writePoint(el.impX, el.impY, null);
-    el.gunPaste.value = el.tgtPaste.value = el.impPaste.value = el.dialUsed.value = "";
+    selectWeapon(h.weapon);
+    el.gun.value = pointText(h.gun);
+    el.target.value = pointText(h.target);
+    el.impact.value = el.dialUsed.value = "";
     render();
     window.scrollTo({ top: 0, behavior: "smooth" });
   });
 
   $("copy-solution").addEventListener("click", () => {
-    const s = current();
-    const sol = solve(s.gun, s.target);
+    const { gun, target } = current();
+    const sol = solve(gun, target);
     if (!sol) return toast("Ainda não há solução para copiar.");
     const az = sol.azimuthDeg == null ? "—" : `${fmt(sol.azimuthDeg, 0)}° ${sol.cardinal}`;
-    copy(`${s.weapon.name}: RNG ${fmt(sol.range)} m, AZ ${az}`, "Solução copiada.");
+    copy(`${WEAPONS[weaponId].name}: RNG ${fmt(sol.range)} m, AZ ${az}`, "Solução copiada.");
   });
 
   $("copy-link").addEventListener("click", () => {
-    const s = current();
-    if (!isPoint(s.gun) && !isPoint(s.target)) return toast("Preencha ao menos uma posição.");
-    const url = buildShareUrl({
-      gun: isPoint(s.gun) ? s.gun : null,
-      target: isPoint(s.target) ? s.target : null,
-      weapon: s.weaponId,
-    });
-    copy(url, "Link copiado. Mande para o esquadrão.");
+    const { gun, target } = current();
+    if (!gun && !target) return toast("Preencha ao menos uma posição.");
+    copy(buildShareUrl({ gun, target, weapon: weaponId }), "Link copiado. Manda pro esquadrão.");
   });
 }
 
 /* ---------- Início ---------- */
 
 function init() {
+  buildWeapons();
   wire();
 
   const saved = loadState();
   const shared = readShareParams();
-  const weaponId = [shared.weapon, saved.weapon].find((w) => w && WEAPONS[w]) ?? DEFAULT_WEAPON;
-  el.weapon.value = weaponId;
-  writePoint(el.gunX, el.gunY, shared.gun ?? saved.gun ?? null);
-  writePoint(el.tgtX, el.tgtY, shared.target ?? saved.target ?? null);
+  selectWeapon([shared.weapon, saved.weapon].find((w) => w && WEAPONS[w]) ?? DEFAULT_WEAPON);
+  el.gun.value = pointText(shared.gun ?? (isPoint(saved.gun) ? saved.gun : null));
+  el.target.value = pointText(shared.target ?? (isPoint(saved.target) ? saved.target : null));
 
-  if (shared.gun || shared.target) {
-    history.replaceState(null, "", location.pathname); // limpa a URL depois de carregar
-  }
+  if (shared.gun || shared.target) history.replaceState(null, "", location.pathname);
 
   renderHistory();
   render();
+  document.fonts?.ready.then(moveMarker);
 }
 
 init();
